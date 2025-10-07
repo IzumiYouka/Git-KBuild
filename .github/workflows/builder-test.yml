@@ -26,14 +26,6 @@ on:
           - full_lto
           - thin_lto
         default: full_lto
-      COMPILER:
-        description: 'Choose Clang compiler'
-        type: choice
-        options:
-          - proton
-          - aosp
-          - aosp21
-        default: proton
 
 jobs:
   build:
@@ -46,27 +38,11 @@ jobs:
           sudo apt install -y bc bison flex build-essential zip curl libssl-dev \
               ccache python3 rsync lz4 git unzip wget
 
-      - name: Download Clang
+      - name: Download Proton Clang
         run: |
-          if [[ "${{ github.event.inputs.COMPILER }}" == "aosp" ]]; then
-            echo "📦 Downloading AOSP clang-r547379"
-            wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r547379.tar.gz -O clang.tar.gz
-            mkdir clang && tar -xf clang.tar.gz -C clang
-          elif [[ "${{ github.event.inputs.COMPILER }}" == "aosp21" ]]; then
-            echo "📦 Downloading AOSP clang-r574158"
-            wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/d0e0a3882edb1acc193263ae98fce706e82aca38/clang-r574158.tar.gz -O clang.tar.gz
-            mkdir clang && tar -xf clang.tar.gz -C clang
-          else
-            echo "⚙️ Downloading Proton Clang (kdrag0n)"
-            git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-          fi
+          echo "⚙️ Downloading Proton Clang (kdrag0n)"
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-    - name: Patch linker for AOSP clang (compatibility fix)
-      if: ${{ github.event.inputs.COMPILER != 'proton' }}
-      run: |
-        echo "🔧 Fixing linker incompatibility for AOSP Clang"
-        sudo ln -sf /usr/bin/ld $GITHUB_WORKSPACE/clang/bin/ld || true
-        
       - name: Clone Kernel Source
         run: |
           git clone --depth=1 -b "${{ github.event.inputs.BRANCH }}" \
@@ -170,7 +146,7 @@ jobs:
         run: |
           MESSAGE="✅ *Build Sukses!*\n\
           📱 Device: ${{ github.event.inputs.CODENAME }}\n\
-          ⚙️ Compiler: ${{ github.event.inputs.COMPILER }}\n\
+          ⚙️ Compiler: Proton Clang\n\
           🧩 LTO: ${{ github.event.inputs.LTO_TYPE }}\n\
           🏷 Version: ${{ github.event.inputs.CUSTOM_VERSION }}\n\
           📅 $(date +'%Y-%m-%d %H:%M')"
@@ -198,7 +174,7 @@ jobs:
           fi
           MESSAGE="❌ *Build Gagal!*\n\
           📱 Device: ${{ github.event.inputs.CODENAME }}\n\
-          ⚙️ Compiler: ${{ github.event.inputs.COMPILER }}\n\
+          ⚙️ Compiler: Proton Clang\n\
           🧩 LTO: ${{ github.event.inputs.LTO_TYPE }}\n\
           🏷 Version: ${{ github.event.inputs.CUSTOM_VERSION }}\n\n\
           🔍 *Ringkasan Log Error:*\n\`\`\`\n${LOG_CONTENT}\n\`\`\`"
