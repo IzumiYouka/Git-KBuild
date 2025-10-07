@@ -28,11 +28,13 @@ jobs:
             ccache python3 rsync lz4 git unzip wget \
             libelf-dev liblz4-tool dwarves
 
-      - name: Download Proton Clang (LLVM 17)
+      - name: Download Proton Clang (LLVM 17 Prebuilt)
         run: |
-          echo "⚙️ Downloading Proton Clang LLVM-17 (compatible build)..."
-          wget https://github.com/kdrag0n/proton-clang/archive/refs/tags/20231126.tar.gz -O clang.tar.gz
-          mkdir clang && tar -xf clang.tar.gz --strip-components=1 -C clang
+          echo "⚙️ Downloading Proton Clang LLVM-17 prebuilt..."
+          wget https://github.com/kdrag0n/proton-clang/releases/download/2023-11-26/proton-clang-2023-11-26.tar.zst -O clang.tar.zst
+          mkdir clang
+          unzstd clang.tar.zst
+          tar -xf clang.tar -C clang
 
       - name: Clone Danda Kernel Source (walt branch)
         run: |
@@ -79,7 +81,7 @@ jobs:
         if: failure()
         run: |
           cd kernel_tree
-          tail -n 30 build.log > ../build_fail_summary.txt
+          tail -n 30 build.log > ../build_fail_summary.txt || echo "No log generated."
 
       - name: Upload Kernel Artifact
         if: success()
