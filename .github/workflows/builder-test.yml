@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install deps
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -26,43 +26,91 @@ jobs:
             ccache python3 rsync lz4 git unzip wget \
             libelf-dev liblz4-tool dwarves lld llvm clang-tools
 
-      - name: Fetch AOSP clang-r487747 (LLVM 15) via sparse clone
+      - name: Download AOSP Clang r487747 (LLVM 15)
         run: |
-          set -e
-          git clone --filter=blob:none --sparse \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            aosp-clang
-          cd aosp-clang
-          git sparse-checkout set clang-r487747
-          # kalau mau pin ke commit spesifik, uncomment baris di bawah:
-          # git checkout 788f1e86014660a5230ba4e9f52c39d5b393cd2b || true
-          cd ..
-          mv aosp-clang/clang-r487747 clang
-          echo "Using toolchain:"
+          echo "⚙️ Downloading AOSP clang-r487747 (LLVM 15)..."
+          wget "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/788f1e86014660a5230ba4e9f52c39d5b393cd2b/clang-r487747.tar.gz?format=TEXT" -O clang_base64.tar.gz
+          base64 -d clang_base64.tar.gz > clang.tar.gz
+          mkdir clang && tar -xf clang.tar.gz -C clang
+          echo "✅ Clang extracted successfully"
           ./clang/bin/clang --version || true
-          ./clang/bin/ld.lld --version || true
 
-      - name: Clone kernel source (walt)
+      - name: Clone Danda kernel source (walt branch)
         run: |
           git clone --depth=1 -b walt https://github.com/Danda420/kernel_xiaomi_sm8250 kernel_tree
 
-      - name: Smart patches (only if needed)
+      - name: Apply compatibility patches
         run: |
           cd kernel_tree
-          # stack_pointer.h
+          echo "🔧 Checking kernel source for LLVM 15 compatibility..."
+          # Patch stack_pointer.h
           if grep -q 'register unsigned long current_stack_pointer asm ("sp")' arch/arm64/include/asm/stack_pointer.h; then
-            sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched/g' arch/arm64/include/asm/stack_pointer.h
+            echo "🩹 Patching stack_pointer.h"
+            sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched for LLVM15/g' arch/arm64/include/asm/stack_pointer.h
           fi
-          # kgdb.h constraint
+          # Patch kgdb.h constraint
           if grep -q '"I" (KGDB_COMPILED_DBG_BRK_IMM)' arch/arm64/include/asm/kgdb.h; then
+            echo "🩹 Patching kgdb.h"
             sed -i 's/"I" (KGDB_COMPILED_DBG_BRK_IMM)/"r" (KGDB_COMPILED_DBG_BRK_IMM)/g' arch/arm64/include/asm/kgdb.h
           fi
-          # vdso gettimeofday (biasanya aman di LLVM15; tetap kondisional)
+          # Patch gettimeofday registers (optional)
           if grep -q 'asm("x0")' arch/arm64/include/asm/vdso/gettimeofday.h 2>/dev/null; then
+            echo "🩹 Patching vdso/gettimeofday.h"
             sed -i 's/asm("x0")/asm("r0")/g; s/asm("x1")/asm("r1")/g; s/asm("x8")/asm("r8")/g' arch/arm64/include/asm/vdso/gettimeofday.h || true
           fi
 
-      - name: Build kernel (alioth_defconfig)
+      - name: Configure and build kernel
         run: |
           export PATH="$PWD/clang/bin:$PATH"
-          export
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER="github"
+          export KBUILD_BUILD_HOST="actions"
+          export KBUILD_BUILD_TIMESTAMP="$(TZ=Asia/Jakarta date)"
+          cd kernel_tree
+
+          echo "🧩 Using defconfig: vendor/alioth_defconfig"
+          make O=out vendor/alioth_defconfig
+
+          # Custom version suffix
+          if [[ "${{ github.event.inputs.CUSTOM_VERSION }}" != "" ]]; then
+            sed -i 's/^CONFIG_LOCALVERSION=.*/CONFIG_LOCALVERSION="${{ github.event.inputs.CUSTOM_VERSION }}"/' \
+              arch/arm64/configs/vendor/alioth_defconfig || true
+          fi
+
+          # Optional LTO config
+          if [[ "${{ github.event.inputs.LTO_TYPE }}" == "thin_lto" ]]; then
+            sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' arch/arm64/configs/vendor/alioth_defconfig || true
+            sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' arch/arm64/configs/vendor/alioth_defconfig || true
+          fi
+
+          echo "🚀 Building kernel..."
+          make -j"$(nproc)" O=out CC=clang LLVM=1 LLVM_IAS=1 2>&1 | tee build.log
+
+          if [[ ! -f out/arch/arm64/boot/Image.gz-dtb ]]; then
+            echo "❌ Kernel build failed, Image.gz-dtb not found."
+            exit 1
+          fi
+
+          cp out/arch/arm64/boot/Image.gz-dtb ../Image.gz-dtb
+          echo "✅ Build completed successfully"
+
+      - name: Package flashable ZIP
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+          cp Image.gz-dtb AnyKernel3/zImage
+          cd AnyKernel3
+          ZIP_NAME="DandaKernel-Alioth-clangr487747${{ github.event.inputs.CUSTOM_VERSION }}-$(date +%Y%m%d).zip"
+          zip -r9 "../$ZIP_NAME" * -x .git* README.md .github
+          cd ..
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          echo "✅ ZIP packaged as $ZIP_NAME"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: DandaKernel-Alioth-clangr487747
+          path: |
+            Image.gz-dtb
+            ${{ env.ZIP_NAME }}
+            kernel_tree/build.log
