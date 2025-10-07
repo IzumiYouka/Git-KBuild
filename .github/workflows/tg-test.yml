@@ -3,7 +3,7 @@
 on:
   workflow_dispatch:
 
-jobs:
+job:
   telegram_test:
     runs-on: ubuntu-latest
 
