@@ -1,9 +1,9 @@
- name: Telegram Connection Test
+name: Telegram Connection Test
 
 on:
   workflow_dispatch:
 
-job:
+jobs:
   telegram_test:
     runs-on: ubuntu-latest
 
