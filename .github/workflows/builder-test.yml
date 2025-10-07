@@ -29,7 +29,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Install dependencies
@@ -62,13 +62,16 @@ jobs:
 
           # Apply custom LOCALVERSION if defined
           if [[ "${{ github.event.inputs.CUSTOM_VERSION }}" != "" ]]; then
-            sed -i "s/CONFIG_LOCALVERSION=\".*\"/CONFIG_LOCALVERSION=\"${{ github.event.inputs.CUSTOM_VERSION }}\"/" arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
+            sed -i "s/CONFIG_LOCALVERSION=\".*\"/CONFIG_LOCALVERSION=\"${{ github.event.inputs.CUSTOM_VERSION }}\"/" \
+              arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
           fi
 
           # Adjust LTO mode if thin_lto is chosen
           if [[ "${{ github.event.inputs.LTO_TYPE }}" == "thin_lto" ]]; then
-            sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
-            sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
+            sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' \
+              arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
+            sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' \
+              arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
           fi
 
       - name: Build Kernel
@@ -105,7 +108,7 @@ jobs:
   package:
     needs: build
     if: success()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Download Kernel Build
@@ -138,7 +141,7 @@ jobs:
 
   telegram_notify:
     needs: [build, package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Notify Telegram (Success)
