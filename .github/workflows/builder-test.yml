@@ -1,4 +1,4 @@
-name: DandaKernel-AliothBuilder
+name: DandaKernel-Alioth-NeutronBuilder
 
 on:
   workflow_dispatch:
@@ -28,17 +28,32 @@ jobs:
             ccache python3 rsync lz4 git unzip wget \
             libelf-dev liblz4-tool dwarves
 
-      - name: Download Proton Clang (LLVM 17 Prebuilt)
+      - name: Download Neutron Clang (LLVM-17)
         run: |
-          echo "⚙️ Downloading Proton Clang LLVM-17 prebuilt..."
-          wget https://github.com/kdrag0n/proton-clang/releases/download/2023-11-26/proton-clang-2023-11-26.tar.zst -O clang.tar.zst
-          mkdir clang
-          unzstd clang.tar.zst
-          tar -xf clang.tar -C clang
+          echo "⚙️ Downloading Neutron Clang LLVM-17..."
+          git clone --depth=1 https://github.com/Neutron-Toolchains/clang-build-catalogue clang
 
       - name: Clone Danda Kernel Source (walt branch)
         run: |
           git clone --depth=1 -b walt https://github.com/Danda420/kernel_xiaomi_sm8250 kernel_tree
+
+      - name: Smart Patch for Clang Compatibility
+        run: |
+          cd kernel_tree
+          echo "🔍 Checking for known clang issues..."
+          if grep -q 'register unsigned long current_stack_pointer asm ("sp")' arch/arm64/include/asm/stack_pointer.h; then
+            echo "🩹 Patching stack_pointer.h (remove register sp)..."
+            sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched/g' arch/arm64/include/asm/stack_pointer.h
+          else
+            echo "✅ stack_pointer.h safe."
+          fi
+
+          if grep -q '"I" (KGDB_COMPILED_DBG_BRK_IMM)' arch/arm64/include/asm/kgdb.h; then
+            echo "🩹 Patching kgdb.h (constraint fix)..."
+            sed -i 's/"I" (KGDB_COMPILED_DBG_BRK_IMM)/"r" (KGDB_COMPILED_DBG_BRK_IMM)/g' arch/arm64/include/asm/kgdb.h
+          else
+            echo "✅ kgdb.h safe."
+          fi
 
       - name: Configure & Build Kernel
         id: build_kernel
@@ -54,13 +69,13 @@ jobs:
           echo "🧩 Using defconfig: vendor/alioth_defconfig"
           make O=out vendor/alioth_defconfig
 
-          # Optional custom version
+          # Custom version
           if [[ "${{ github.event.inputs.CUSTOM_VERSION }}" != "" ]]; then
             sed -i "s/CONFIG_LOCALVERSION=\".*\"/CONFIG_LOCALVERSION=\"${{ github.event.inputs.CUSTOM_VERSION }}\"/" \
               arch/arm64/configs/vendor/alioth_defconfig || true
           fi
 
-          # Optional LTO config
+          # LTO option
           if [[ "${{ github.event.inputs.LTO_TYPE }}" == "thin_lto" ]]; then
             sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' arch/arm64/configs/vendor/alioth_defconfig || true
             sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' arch/arm64/configs/vendor/alioth_defconfig || true
