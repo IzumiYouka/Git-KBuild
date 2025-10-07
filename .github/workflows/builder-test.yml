@@ -1,4 +1,4 @@
-name: DandaKernel-Alioth-NeutronBuilder
+name: DandaKernel-Alioth-Clang18
 
 on:
   workflow_dispatch:
@@ -26,37 +26,31 @@ jobs:
           sudo apt install -y \
             bc bison flex build-essential zip curl libssl-dev \
             ccache python3 rsync lz4 git unzip wget \
-            libelf-dev liblz4-tool dwarves
+            libelf-dev liblz4-tool dwarves lld llvm clang-tools
 
-      - name: Download Neutron Clang (LLVM-17)
+      - name: Download Clang 18.0.1 (Android prebuilts)
         run: |
-          echo "⚙️ Downloading Neutron Clang LLVM-17..."
-          git clone --depth=1 https://github.com/Neutron-Toolchains/clang-build-catalogue clang
+          echo "⚙️ Downloading Clang 18.0.1 prebuilts..."
+          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r588983b.tar.gz -O clang.tar.gz
+          mkdir clang && tar -xf clang.tar.gz -C clang
 
       - name: Clone Danda Kernel Source (walt branch)
         run: |
           git clone --depth=1 -b walt https://github.com/Danda420/kernel_xiaomi_sm8250 kernel_tree
 
-      - name: Smart Patch for Clang Compatibility
+      - name: Clone AnyKernel3 Template
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
+
+      - name: Patch for Clang 18 Compatibility
         run: |
           cd kernel_tree
-          echo "🔍 Checking for known clang issues..."
-          if grep -q 'register unsigned long current_stack_pointer asm ("sp")' arch/arm64/include/asm/stack_pointer.h; then
-            echo "🩹 Patching stack_pointer.h (remove register sp)..."
-            sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched/g' arch/arm64/include/asm/stack_pointer.h
-          else
-            echo "✅ stack_pointer.h safe."
-          fi
-
-          if grep -q '"I" (KGDB_COMPILED_DBG_BRK_IMM)' arch/arm64/include/asm/kgdb.h; then
-            echo "🩹 Patching kgdb.h (constraint fix)..."
-            sed -i 's/"I" (KGDB_COMPILED_DBG_BRK_IMM)/"r" (KGDB_COMPILED_DBG_BRK_IMM)/g' arch/arm64/include/asm/kgdb.h
-          else
-            echo "✅ kgdb.h safe."
-          fi
+          echo "🩹 Patching kernel source for Clang 18..."
+          sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched for clang18/g' arch/arm64/include/asm/stack_pointer.h || true
+          sed -i 's/"I" (KGDB_COMPILED_DBG_BRK_IMM)/"r" (KGDB_COMPILED_DBG_BRK_IMM)/g' arch/arm64/include/asm/kgdb.h || true
+          sed -i 's/asm("x0")/asm("r0")/g; s/asm("x1")/asm("r1")/g; s/asm("x8")/asm("r8")/g' arch/arm64/include/asm/vdso/gettimeofday.h || true
 
       - name: Configure & Build Kernel
-        id: build_kernel
         run: |
           export PATH="$PWD/clang/bin:$PATH"
           export ARCH=arm64
@@ -69,13 +63,11 @@ jobs:
           echo "🧩 Using defconfig: vendor/alioth_defconfig"
           make O=out vendor/alioth_defconfig
 
-          # Custom version
           if [[ "${{ github.event.inputs.CUSTOM_VERSION }}" != "" ]]; then
             sed -i "s/CONFIG_LOCALVERSION=\".*\"/CONFIG_LOCALVERSION=\"${{ github.event.inputs.CUSTOM_VERSION }}\"/" \
               arch/arm64/configs/vendor/alioth_defconfig || true
           fi
 
-          # LTO option
           if [[ "${{ github.event.inputs.LTO_TYPE }}" == "thin_lto" ]]; then
             sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' arch/arm64/configs/vendor/alioth_defconfig || true
             sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' arch/arm64/configs/vendor/alioth_defconfig || true
@@ -90,87 +82,31 @@ jobs:
           fi
 
           cp out/arch/arm64/boot/Image.gz-dtb ../Image.gz-dtb
-          echo "BUILD_STATUS=0" >> $GITHUB_ENV
+          echo "✅ Kernel built successfully."
 
-      - name: Save build fail summary
-        if: failure()
+      - name: Package with AnyKernel3
         run: |
-          cd kernel_tree
-          tail -n 30 build.log > ../build_fail_summary.txt || echo "No log generated."
+          COMPILED_DATE=$(date +%Y%m%d)
+          ZIP_NAME="DandaKernel-Alioth-Clang18${{ github.event.inputs.CUSTOM_VERSION }}-${COMPILED_DATE}.zip"
 
-      - name: Upload Kernel Artifact
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: DandaKernel-Alioth
-          path: Image.gz-dtb
-
-      - name: Upload Build Log (if failed)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-failure-log
-          path: build_fail_summary.txt
-
-  package:
-    needs: build
-    if: success()
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Download kernel artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: DandaKernel-Alioth
-          path: out
-
-      - name: Clone AnyKernel3
-        run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-
-      - name: Package flashable zip
-        run: |
-          cp out/Image.gz-dtb AnyKernel3/zImage || true
+          cp Image.gz-dtb AnyKernel3/
           cd AnyKernel3
-          zipname="DandaKernel-Alioth${{ github.event.inputs.CUSTOM_VERSION }}-$(date +%Y%m%d).zip"
-          zip -r9 "../$zipname" * -x .git* README.md *placeholder*
-          echo "ZIP_NAME=$zipname" >> $GITHUB_ENV
+          zip -r9 "../${ZIP_NAME}" * -x .git README.md .github
+          cd ..
 
-      - name: Upload flashable ZIP
+          echo "📦 Flashable zip created: ${ZIP_NAME}"
+
+      - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ZIP_NAME }}
-          path: ${{ env.ZIP_NAME }}
+          name: DandaKernel-Alioth-Clang18
+          path: |
+            Image.gz-dtb
+            *.zip
 
-  telegram_notify:
-    needs: [build, package]
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Telegram Success Notify
-        if: success()
-        run: |
-          MESSAGE="✅ *Build Sukses!*\n\
-          ⚙️ Danda Kernel (WALT branch)\n\
-          🧩 Defconfig: alioth_defconfig\n\
-          🏷 Version: ${{ github.event.inputs.CUSTOM_VERSION }}\n\
-          🧠 LTO: ${{ github.event.inputs.LTO_TYPE }}\n\
-          📅 $(date +'%Y-%m-%d %H:%M')"
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
-          -d chat_id=${{ secrets.TG_CHAT_ID }} \
-          -d parse_mode="Markdown" \
-          -d text="$MESSAGE"
-
-      - name: Telegram Fail Notify
-        if: failure()
-        run: |
-          LOG_FILE="build_fail_summary.txt"
-          LOG_CONTENT=$(cat "$LOG_FILE" 2>/dev/null || echo "No summary log.")
-          MESSAGE="❌ *Build Gagal!*\n\
-          ⚙️ Danda Kernel (WALT branch)\n\
-          🧩 Defconfig: alioth_defconfig\n\
-          🏷 Version: ${{ github.event.inputs.CUSTOM_VERSION }}\n\n\
-          🔍 *Ringkasan Error:*\n\`\`\`\n${LOG_CONTENT}\n\`\`\`"
-          curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
-          -d chat_id=${{ secrets.TG_CHAT_ID }} \
-          -d parse_mode="Markdown" \
-          -d text="$MESSAGE"
+      - name: Upload Build Log (Always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: kernel_tree/build.log
