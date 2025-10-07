@@ -61,12 +61,12 @@ jobs:
             git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
           fi
 
-      - name: Patch linker for AOSP clang (compatibility fix)
-        if: ${{ github.event.inputs.COMPILER != 'proton' }}
-        run: |
-          echo "🔧 Fixing linker incompatibility for AOSP Clang"
-          sudo ln -sf /usr/bin/ld /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}/clang/bin/ld || true
-
+    - name: Patch linker for AOSP clang (compatibility fix)
+      if: ${{ github.event.inputs.COMPILER != 'proton' }}
+      run: |
+        echo "🔧 Fixing linker incompatibility for AOSP Clang"
+        sudo ln -sf /usr/bin/ld $GITHUB_WORKSPACE/clang/bin/ld || true
+        
       - name: Clone Kernel Source
         run: |
           git clone --depth=1 -b "${{ github.event.inputs.BRANCH }}" \
