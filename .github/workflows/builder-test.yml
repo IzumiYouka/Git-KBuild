@@ -1,18 +1,16 @@
-name: DandaKernel-Alioth-Clang18
+name: DandaKernel-Alioth-Clang15
 
 on:
   workflow_dispatch:
     inputs:
       CUSTOM_VERSION:
-        description: 'Custom kernel version (e.g. -Oxygen)'
+        description: 'Suffix versi kernel (mis. -Oxygen)'
         default: '-Oxygen'
         required: false
       LTO_TYPE:
-        description: 'Choose LTO type (full_lto or thin_lto)'
+        description: 'Pilih LTO'
         type: choice
-        options:
-          - full_lto
-          - thin_lto
+        options: [full_lto, thin_lto]
         default: full_lto
 
 jobs:
@@ -20,7 +18,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install build dependencies
+      - name: Install deps
         run: |
           sudo apt update
           sudo apt install -y \
@@ -28,85 +26,43 @@ jobs:
             ccache python3 rsync lz4 git unzip wget \
             libelf-dev liblz4-tool dwarves lld llvm clang-tools
 
-      - name: Download Clang 18.0.1 (Android prebuilts)
+      - name: Fetch AOSP clang-r487747 (LLVM 15) via sparse clone
         run: |
-          echo "⚙️ Downloading Clang 18.0.1 prebuilts..."
-          wget https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r588983b.tar.gz -O clang.tar.gz
-          mkdir clang && tar -xf clang.tar.gz -C clang
+          set -e
+          git clone --filter=blob:none --sparse \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
+            aosp-clang
+          cd aosp-clang
+          git sparse-checkout set clang-r487747
+          # kalau mau pin ke commit spesifik, uncomment baris di bawah:
+          # git checkout 788f1e86014660a5230ba4e9f52c39d5b393cd2b || true
+          cd ..
+          mv aosp-clang/clang-r487747 clang
+          echo "Using toolchain:"
+          ./clang/bin/clang --version || true
+          ./clang/bin/ld.lld --version || true
 
-      - name: Clone Danda Kernel Source (walt branch)
+      - name: Clone kernel source (walt)
         run: |
           git clone --depth=1 -b walt https://github.com/Danda420/kernel_xiaomi_sm8250 kernel_tree
 
-      - name: Clone AnyKernel3 Template
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-
-      - name: Patch for Clang 18 Compatibility
+      - name: Smart patches (only if needed)
         run: |
           cd kernel_tree
-          echo "🩹 Patching kernel source for Clang 18..."
-          sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched for clang18/g' arch/arm64/include/asm/stack_pointer.h || true
-          sed -i 's/"I" (KGDB_COMPILED_DBG_BRK_IMM)/"r" (KGDB_COMPILED_DBG_BRK_IMM)/g' arch/arm64/include/asm/kgdb.h || true
-          sed -i 's/asm("x0")/asm("r0")/g; s/asm("x1")/asm("r1")/g; s/asm("x8")/asm("r8")/g' arch/arm64/include/asm/vdso/gettimeofday.h || true
+          # stack_pointer.h
+          if grep -q 'register unsigned long current_stack_pointer asm ("sp")' arch/arm64/include/asm/stack_pointer.h; then
+            sed -i 's/register unsigned long current_stack_pointer asm ("sp");/unsigned long current_stack_pointer; \/\/ patched/g' arch/arm64/include/asm/stack_pointer.h
+          fi
+          # kgdb.h constraint
+          if grep -q '"I" (KGDB_COMPILED_DBG_BRK_IMM)' arch/arm64/include/asm/kgdb.h; then
+            sed -i 's/"I" (KGDB_COMPILED_DBG_BRK_IMM)/"r" (KGDB_COMPILED_DBG_BRK_IMM)/g' arch/arm64/include/asm/kgdb.h
+          fi
+          # vdso gettimeofday (biasanya aman di LLVM15; tetap kondisional)
+          if grep -q 'asm("x0")' arch/arm64/include/asm/vdso/gettimeofday.h 2>/dev/null; then
+            sed -i 's/asm("x0")/asm("r0")/g; s/asm("x1")/asm("r1")/g; s/asm("x8")/asm("r8")/g' arch/arm64/include/asm/vdso/gettimeofday.h || true
+          fi
 
-      - name: Configure & Build Kernel
+      - name: Build kernel (alioth_defconfig)
         run: |
           export PATH="$PWD/clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export KBUILD_BUILD_USER="github"
-          export KBUILD_BUILD_HOST="actions"
-          export KBUILD_BUILD_TIMESTAMP="$(TZ=Asia/Jakarta date)"
-          cd kernel_tree
-
-          echo "🧩 Using defconfig: vendor/alioth_defconfig"
-          make O=out vendor/alioth_defconfig
-
-          if [[ "${{ github.event.inputs.CUSTOM_VERSION }}" != "" ]]; then
-            sed -i "s/CONFIG_LOCALVERSION=\".*\"/CONFIG_LOCALVERSION=\"${{ github.event.inputs.CUSTOM_VERSION }}\"/" \
-              arch/arm64/configs/vendor/alioth_defconfig || true
-          fi
-
-          if [[ "${{ github.event.inputs.LTO_TYPE }}" == "thin_lto" ]]; then
-            sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' arch/arm64/configs/vendor/alioth_defconfig || true
-            sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' arch/arm64/configs/vendor/alioth_defconfig || true
-          fi
-
-          echo "🚀 Building kernel..."
-          make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 2>&1 | tee build.log
-
-          if [[ ! -f out/arch/arm64/boot/Image.gz-dtb ]]; then
-            echo "❌ Kernel build failed, Image.gz-dtb not found."
-            exit 1
-          fi
-
-          cp out/arch/arm64/boot/Image.gz-dtb ../Image.gz-dtb
-          echo "✅ Kernel built successfully."
-
-      - name: Package with AnyKernel3
-        run: |
-          COMPILED_DATE=$(date +%Y%m%d)
-          ZIP_NAME="DandaKernel-Alioth-Clang18${{ github.event.inputs.CUSTOM_VERSION }}-${COMPILED_DATE}.zip"
-
-          cp Image.gz-dtb AnyKernel3/
-          cd AnyKernel3
-          zip -r9 "../${ZIP_NAME}" * -x .git README.md .github
-          cd ..
-
-          echo "📦 Flashable zip created: ${ZIP_NAME}"
-
-      - name: Upload Kernel Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: DandaKernel-Alioth-Clang18
-          path: |
-            Image.gz-dtb
-            *.zip
-
-      - name: Upload Build Log (Always)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: kernel_tree/build.log
+          export
