@@ -1,22 +1,10 @@
-name: Danda420-alioth-builder
+name: DandaKernel-AliothBuilder
 
 on:
   workflow_dispatch:
     inputs:
-      KERNEL_TREE:
-        description: 'Kernel Tree URL'
-        default: 'https://github.com/Danda420/kernel_xiaomi_sm8250'
-        required: true
-      BRANCH:
-        description: 'Kernel Branch'
-        default: 'walt'
-        required: true
-      CODENAME:
-        description: 'Device codename (alioth/apollo/munch)'
-        default: 'alioth'
-        required: true
       CUSTOM_VERSION:
-        description: 'Custom kernel version (ex: -Oxygen)'
+        description: 'Custom kernel version (e.g. -Oxygen)'
         default: '-Oxygen'
         required: false
       LTO_TYPE:
@@ -35,20 +23,22 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison flex build-essential zip curl libssl-dev \
-              ccache python3 rsync lz4 git unzip wget
+          sudo apt install -y \
+            bc bison flex build-essential zip curl libssl-dev \
+            ccache python3 rsync lz4 git unzip wget \
+            libelf-dev liblz4-tool dwarves
 
       - name: Download Proton Clang
         run: |
-          echo "⚙️ Downloading Proton Clang (kdrag0n)"
+          echo "⚙️ Downloading Proton Clang..."
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: Clone Kernel Source
+      - name: Clone Danda Kernel Source (walt branch)
         run: |
-          git clone --depth=1 -b "${{ github.event.inputs.BRANCH }}" \
-            "${{ github.event.inputs.KERNEL_TREE }}" kernel_tree
+          git clone --depth=1 -b walt https://github.com/Danda420/kernel_xiaomi_sm8250 kernel_tree
 
-      - name: Configure Build Environment
+      - name: Configure & Build Kernel
+        id: build_kernel
         run: |
           export PATH="$PWD/clang/bin:$PATH"
           export ARCH=arm64
@@ -56,49 +46,48 @@ jobs:
           export KBUILD_BUILD_USER="github"
           export KBUILD_BUILD_HOST="actions"
           export KBUILD_BUILD_TIMESTAMP="$(TZ=Asia/Jakarta date)"
-          mkdir -p kernel_tree/out
           cd kernel_tree
-          make O=out vendor/${{ github.event.inputs.CODENAME }}_defconfig
 
-          # Apply custom LOCALVERSION if defined
+          echo "🧩 Using defconfig: vendor/alioth_defconfig"
+          make O=out vendor/alioth_defconfig
+
+          # Optional custom version
           if [[ "${{ github.event.inputs.CUSTOM_VERSION }}" != "" ]]; then
             sed -i "s/CONFIG_LOCALVERSION=\".*\"/CONFIG_LOCALVERSION=\"${{ github.event.inputs.CUSTOM_VERSION }}\"/" \
-              arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
+              arch/arm64/configs/vendor/alioth_defconfig || true
           fi
 
-          # Adjust LTO mode if thin_lto is chosen
+          # Optional LTO config
           if [[ "${{ github.event.inputs.LTO_TYPE }}" == "thin_lto" ]]; then
-            sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' \
-              arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
-            sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' \
-              arch/arm64/configs/vendor/${{ github.event.inputs.CODENAME }}_defconfig || true
+            sed -i '/CONFIG_LTO_CLANG_FULL=y/c\# CONFIG_LTO_CLANG_FULL is not set' arch/arm64/configs/vendor/alioth_defconfig || true
+            sed -i '/# CONFIG_LTO_CLANG_THIN is not set/c\CONFIG_LTO_CLANG_THIN=y' arch/arm64/configs/vendor/alioth_defconfig || true
           fi
 
-      - name: Build Kernel
-        id: build_kernel
-        run: |
-          export PATH="$PWD/clang/bin:$PATH"
-          cd kernel_tree
+          echo "🚀 Building kernel..."
           make -j$(nproc) O=out CC=clang LLVM=1 LLVM_IAS=1 2>&1 | tee build.log
-          echo "BUILD_STATUS=$?" >> $GITHUB_ENV
 
-      - name: Save last 20 lines of log
+          if [[ ! -f out/arch/arm64/boot/Image.gz-dtb ]]; then
+            echo "❌ Kernel build failed, Image.gz-dtb not found."
+            exit 1
+          fi
+
+          cp out/arch/arm64/boot/Image.gz-dtb ../Image.gz-dtb
+          echo "BUILD_STATUS=0" >> $GITHUB_ENV
+
+      - name: Save build fail summary
         if: failure()
         run: |
           cd kernel_tree
-          tail -n 20 build.log > ../build_fail_summary.txt
+          tail -n 30 build.log > ../build_fail_summary.txt
 
-      - name: Upload Kernel Artifacts
+      - name: Upload Kernel Artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-build-${{ github.event.inputs.CODENAME }}
-          path: |
-            kernel_tree/out/arch/arm64/boot/Image*
-            kernel_tree/out/arch/arm64/boot/dtb*
-            kernel_tree/out/arch/arm64/boot/dtbo*
+          name: DandaKernel-Alioth
+          path: Image.gz-dtb
 
-      - name: Upload Failure Log (if failed)
+      - name: Upload Build Log (if failed)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -111,29 +100,24 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Download Kernel Build
+      - name: Download kernel artifact
         uses: actions/download-artifact@v4
         with:
-          name: kernel-build-${{ github.event.inputs.CODENAME }}
+          name: DandaKernel-Alioth
           path: out
 
       - name: Clone AnyKernel3
         run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
 
-      - name: Copy kernel output to AnyKernel3
+      - name: Package flashable zip
         run: |
-          cp out/Image* AnyKernel3/ || true
-          cp out/dtb* AnyKernel3/ || true
-          cp out/dtbo* AnyKernel3/ || true
-
-      - name: Package Flashable ZIP
-        run: |
+          cp out/Image.gz-dtb AnyKernel3/zImage || true
           cd AnyKernel3
-          zipname="DandaKernel-${{ github.event.inputs.CODENAME }}${{ github.event.inputs.CUSTOM_VERSION }}-$(date +%Y%m%d).zip"
+          zipname="DandaKernel-Alioth${{ github.event.inputs.CUSTOM_VERSION }}-$(date +%Y%m%d).zip"
           zip -r9 "../$zipname" * -x .git* README.md *placeholder*
           echo "ZIP_NAME=$zipname" >> $GITHUB_ENV
 
-      - name: Upload Flashable ZIP
+      - name: Upload flashable ZIP
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ZIP_NAME }}
@@ -144,43 +128,30 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Notify Telegram (Success)
+      - name: Telegram Success Notify
         if: success()
         run: |
           MESSAGE="✅ *Build Sukses!*\n\
-          📱 Device: ${{ github.event.inputs.CODENAME }}\n\
-          ⚙️ Compiler: Proton Clang\n\
-          🧩 LTO: ${{ github.event.inputs.LTO_TYPE }}\n\
+          ⚙️ Danda Kernel (WALT branch)\n\
+          🧩 Defconfig: alioth_defconfig\n\
           🏷 Version: ${{ github.event.inputs.CUSTOM_VERSION }}\n\
+          🧠 LTO: ${{ github.event.inputs.LTO_TYPE }}\n\
           📅 $(date +'%Y-%m-%d %H:%M')"
           curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
           -d chat_id=${{ secrets.TG_CHAT_ID }} \
           -d parse_mode="Markdown" \
           -d text="$MESSAGE"
 
-          ZIP_PATH=$(ls DandaKernel-${{ github.event.inputs.CODENAME }}*.zip 2>/dev/null | head -n1 || true)
-          if [[ -f "$ZIP_PATH" ]]; then
-            curl -F chat_id=${{ secrets.TG_CHAT_ID }} \
-                 -F document=@"$ZIP_PATH" \
-                 -F caption="📦 DandaKernel build complete! (`${{ github.event.inputs.CUSTOM_VERSION }}`)" \
-                 https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendDocument
-          fi
-
-      - name: Notify Telegram (Failure)
+      - name: Telegram Fail Notify
         if: failure()
         run: |
           LOG_FILE="build_fail_summary.txt"
-          if [[ -f "$LOG_FILE" ]]; then
-            LOG_CONTENT=$(cat "$LOG_FILE")
-          else
-            LOG_CONTENT="(Tidak ada log ringkasan ditemukan)"
-          fi
+          LOG_CONTENT=$(cat "$LOG_FILE" 2>/dev/null || echo "No summary log.")
           MESSAGE="❌ *Build Gagal!*\n\
-          📱 Device: ${{ github.event.inputs.CODENAME }}\n\
-          ⚙️ Compiler: Proton Clang\n\
-          🧩 LTO: ${{ github.event.inputs.LTO_TYPE }}\n\
+          ⚙️ Danda Kernel (WALT branch)\n\
+          🧩 Defconfig: alioth_defconfig\n\
           🏷 Version: ${{ github.event.inputs.CUSTOM_VERSION }}\n\n\
-          🔍 *Ringkasan Log Error:*\n\`\`\`\n${LOG_CONTENT}\n\`\`\`"
+          🔍 *Ringkasan Error:*\n\`\`\`\n${LOG_CONTENT}\n\`\`\`"
           curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
           -d chat_id=${{ secrets.TG_CHAT_ID }} \
           -d parse_mode="Markdown" \
