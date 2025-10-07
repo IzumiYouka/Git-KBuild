@@ -1,0 +1,20 @@
+ name: Telegram Connection Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  telegram_test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send test message to Telegram
+        run: |
+          MESSAGE="🤖 GitHub Actions berhasil terhubung ke Telegram!\n\
+          Repository: ${{ github.repository }}\n\
+          User: ${{ github.actor }}\n\
+          Waktu: $(date +'%Y-%m-%d %H:%M:%S')"
+          curl -s -X POST https://api.telegram.org/bot${{ secrets.TG_BOT_TOKEN }}/sendMessage \
+            -d chat_id=${{ secrets.TG_CHAT_ID }} \
+            -d parse_mode="Markdown" \
+            -d text="$MESSAGE"
