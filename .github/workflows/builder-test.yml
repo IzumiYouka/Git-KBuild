@@ -7,7 +7,7 @@ jobs:
   Build-Kernel:
     strategy:
       fail-fast: false
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
 
@@ -19,5 +19,5 @@ jobs:
           kernel-branch: walt
           config: alioth_defconfig
           arch: arm64
-          othee-clang-url: https://codeload.github.com/kdrag0n/proton-clang/tar.gz/refs/tags/20210522
+          other -clang-url: https://codeload.github.com/kdrag0n/proton-clang/tar.gz/refs/tags/20210522
           anykernel3: true
