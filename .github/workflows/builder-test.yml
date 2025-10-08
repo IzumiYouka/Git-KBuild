@@ -20,4 +20,5 @@ jobs:
           config: alioth_defconfig
           arch: arm64
           other-clang-url: https://github.com/kdrag0n/proton-clang
+          other-clang-branch: master
           anykernel3: true
