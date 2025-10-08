@@ -19,6 +19,5 @@ jobs:
           kernel-branch: walt
           config: alioth_defconfig
           arch: arm64
-          other-clang-url: https://github.com/kdrag0n/proton-clang
-          other-clang-branch: master
+          other-clang-url: https://github.com/ZyCromerZ/Clang/releases/download/22.0.0git-20250928-release/Clang-22.0.0git-20250928.tar.gz
           anykernel3: true
