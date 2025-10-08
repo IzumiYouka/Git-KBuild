@@ -19,5 +19,5 @@ jobs:
           kernel-branch: walt
           config: alioth_defconfig
           arch: arm64
-          other-clang-url: https://codeload.github.com/kdrag0n/proton-clang/tar.gz/refs/tags/20210522
+          other-clang-url: https://github.com/kdrag0n/proton-clang
           anykernel3: true
