@@ -91,7 +91,7 @@ jobs:
         run: |
           cd kernel_tree
           rm -rf drivers/kernelsu KernelSU kernel/kernelsu || true
-          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/main/kernel/setup.sh" | bash -
+          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/master/kernel/setup.sh" | bash -
           # quick sanity (non-fatal)
           git status --porcelain || true
 
