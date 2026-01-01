@@ -40,11 +40,7 @@ on:
         type: choice
         options: ["yes", "no"]
         default: "yes"
-
-      KSU_SETUP_MODE:
-        description: "Argument for setup.sh (e.g. nongki)"
-        default: "nongki"
-        required: false
+        
 
       VERBOSE:
         description: "Kernel build verbosity (0/1)"
@@ -86,8 +82,7 @@ jobs:
         run: |
           cd kernel_tree
           rm -rf drivers/kernelsu KernelSU kernel/kernelsu || true
-          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/main/kernel/setup.sh" \
-            | bash -s "${{ github.event.inputs.KSU_SETUP_MODE }}"
+          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/main/kernel/setup.sh" | bash -
           # quick sanity (non-fatal)
           git status --porcelain || true
 
