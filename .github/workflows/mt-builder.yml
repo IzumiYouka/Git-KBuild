@@ -64,11 +64,20 @@ jobs:
             p7zip-full \
             zstd lz4 \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
-
+            
+      - name: Checkout workflow repo (for patches)
+        uses: actions/checkout@v4
+        
       - name: Checkout Kernel Tree
         run: |
           git clone --depth=1 --branch "${{ github.event.inputs.KERNEL_BRANCH }}" \
             "${{ github.event.inputs.KERNEL_TREE_URL }}" kernel_tree
+
+      - name: Apply J3S battery patch (from repo)
+        if: ${{ github.event.inputs.BATTERY_PROFILE == 'j3s' }}
+        run: |
+          cd kernel_tree
+          git am ../patches/0001-j3spatch.patch
 
       - name: Download & Extract Clang (Magictime style)
         run: |
