@@ -1,0 +1,203 @@
+name: MagicTime-alioth-builder
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      KERNEL_TREE_URL:
+        description: "Kernel Tree URL"
+        default: "https://github.com/TIMISONG-dev/kernel_xiaomi_sm8250"
+        required: true
+
+      KERNEL_BRANCH:
+        description: "Kernel Branch (magictime-new / magictime-miui)"
+        default: "magictime-miui"
+        required: true
+
+      DEVICE:
+        description: "Device codename (alioth / pipa)"
+        default: "alioth"
+        required: true
+
+      ANYKERNEL_URL:
+        description: "AnyKernel URL (leave blank to skip packaging)"
+        default: "https://github.com/TIMISONG-dev/MagicTime-alioth"
+        required: false
+
+      ANYKERNEL_BRANCH:
+        description: "AnyKernel branch"
+        default: "main"
+        required: false
+
+      CLANG_TARBALL_URL:
+        description: "Clang tar.gz URL (Magictime uses ZyCromerZ clang 20)"
+        default: "https://github.com/ZyCromerZ/Clang/releases/download/20.0.0git-20250129-release/Clang-20.0.0git-20250129.tar.gz"
+        required: true
+
+      INTEGRATE_BACKSLASHXX_KSU:
+        description: "Integrate backslashxx KernelSU (toolkit) during build"
+        required: true
+        type: choice
+        options: ["yes", "no"]
+        default: "yes"
+
+      KSU_SETUP_MODE:
+        description: "Argument for setup.sh (e.g. nongki)"
+        default: "nongki"
+        required: false
+
+      VERBOSE:
+        description: "Kernel build verbosity (0/1)"
+        default: "0"
+        required: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison flex git curl wget \
+            build-essential \
+            libssl-dev libelf-dev \
+            python3 rsync \
+            zip unzip \
+            p7zip-full \
+            zstd lz4 \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Checkout Kernel Tree
+        run: |
+          git clone --depth=1 --branch "${{ github.event.inputs.KERNEL_BRANCH }}" \
+            "${{ github.event.inputs.KERNEL_TREE_URL }}" kernel_tree
+
+      - name: Download & Extract Clang (Magictime style)
+        run: |
+          mkdir -p clang
+          wget -O clang.tar.gz "${{ github.event.inputs.CLANG_TARBALL_URL }}"
+          tar -xzf clang.tar.gz -C clang
+          rm -f clang.tar.gz
+
+      - name: Integrate backslashxx KernelSU (toolkit) (optional)
+        if: ${{ github.event.inputs.INTEGRATE_BACKSLASHXX_KSU == 'yes' }}
+        run: |
+          cd kernel_tree
+          rm -rf drivers/kernelsu KernelSU kernel/kernelsu || true
+          curl -LSs "https://raw.githubusercontent.com/backslashxx/KernelSU/main/kernel/setup.sh" \
+            | bash -s "${{ github.event.inputs.KSU_SETUP_MODE }}"
+          # quick sanity (non-fatal)
+          git status --porcelain || true
+
+      - name: Build Kernel (Magictime build.sh equivalent)
+        run: |
+          set -e
+          export PATH="$(pwd)/clang/bin:$PATH"
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_BUILD_USER="TIMISONG"
+          export KBUILD_BUILD_HOST="timisong-dev"
+
+          cd kernel_tree
+
+          make O=out "${{ github.event.inputs.DEVICE }}_defconfig" vendor/xiaomi/magictime-common.config
+
+          make -j"$(nproc --all)" \
+            O=out \
+            CC="clang" \
+            HOSTCC="gcc" \
+            LD="ld.lld" \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            V="${{ github.event.inputs.VERBOSE }}"
+
+      - name: Collect Artifacts (Image/Image.gz + dtb/dtbo + config)
+        run: |
+          set -e
+          cd kernel_tree
+          mkdir -p ../out_artifacts
+
+          # Kernel image (AK3 core usually accepts Image or Image.gz)
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image ../out_artifacts/Image
+          fi
+          if [ -f out/arch/arm64/boot/Image.gz ]; then
+            cp out/arch/arm64/boot/Image.gz ../out_artifacts/Image.gz
+          fi
+
+          # DTB/DTBO for Android kernels
+          if [ -f out/arch/arm64/boot/dtb.img ]; then
+            cp out/arch/arm64/boot/dtb.img ../out_artifacts/dtb.img
+          fi
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            cp out/arch/arm64/boot/dtbo.img ../out_artifacts/dtbo.img
+          fi
+
+          # Keep config
+          if [ -f out/.config ]; then
+            cp out/.config ../out_artifacts/kernel.config
+          fi
+
+      - name: Upload Raw Kernel Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagicTime-${{ github.event.inputs.DEVICE }}-${{ github.event.inputs.KERNEL_BRANCH }}-raw
+          path: out_artifacts/*
+
+  package_anykernel:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.ANYKERNEL_URL != '' }}
+
+    steps:
+      - name: Download Raw Kernel Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: MagicTime-${{ github.event.inputs.DEVICE }}-${{ github.event.inputs.KERNEL_BRANCH }}-raw
+          path: out_artifacts
+
+      - name: Clone AnyKernel3
+        run: |
+          git clone --recursive --depth=1 \
+            -b "${{ github.event.inputs.ANYKERNEL_BRANCH }}" \
+            "${{ github.event.inputs.ANYKERNEL_URL }}" AnyKernel3
+
+      - name: Move Kernel Files into AnyKernel3
+        run: |
+          set -e
+          # Prefer Image if present, otherwise Image.gz
+          if [ -f out_artifacts/Image ]; then
+            cp out_artifacts/Image AnyKernel3/
+          elif [ -f out_artifacts/Image.gz ]; then
+            cp out_artifacts/Image.gz AnyKernel3/
+          fi
+
+          # If both exist, also copy the other (harmless; AK3 core will pick one)
+          if [ -f out_artifacts/Image.gz ]; then
+            cp out_artifacts/Image.gz AnyKernel3/ || true
+          fi
+
+          if [ -f out_artifacts/dtb.img ]; then
+            cp out_artifacts/dtb.img AnyKernel3/
+          fi
+          if [ -f out_artifacts/dtbo.img ]; then
+            cp out_artifacts/dtbo.img AnyKernel3/
+          fi
+
+      - name: Create Flashable Zip
+        run: |
+          set -e
+          BUILD_DATE=$(date '+%Y-%m-%d_%H-%M-%S')
+          ZIP="MagicTime-${{ github.event.inputs.DEVICE }}-${{ github.event.inputs.KERNEL_BRANCH }}-${BUILD_DATE}.zip"
+          cd AnyKernel3
+          zip -r9 "../${ZIP}" . -x ".git/*" ".github/*"
+          cd ..
+          echo "ZIP_NAME=${ZIP}" >> $GITHUB_ENV
+
+      - name: Upload Flashable Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIP_NAME }}
+          path: ${{ env.ZIP_NAME }}
